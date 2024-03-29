@@ -1,0 +1,166 @@
+---
+title: "Practice 2: Regression"
+author: "Nimalan Subramanian"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output: 
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(dplyr)
+```
+# Linear Regression
+```{r data import and visualization}
+# Import data
+kick_data <- read.csv("kicking.csv")
+
+# Add spread variable
+kick_data <- kick_data %>%
+  mutate(spread = home_score_pre - visiting_score_pre)
+
+# Create histogram for spread
+ggplot(kick_data, aes(x = spread)) +
+  geom_histogram(bins = 30, fill = "green", color = "black")
+
+```
+
+```{r linear regression}
+library(broom)
+broom::tidy()
+broom::glance()
+
+# Create linear regression model for spread knowing only home, away, quarter, and spread
+spread_linear <- lm(spread ~ factor(home_team) + factor(away_team) + quarter + yardline, data = kick_data)
+
+# Create table for coefficients and p-values
+coeff_pvals <- tidy(spread_linear)
+
+# Get R-squared and adjusted R-squared values
+linear_glance <- glance(spread_linear)
+rsquare_adjrsquare <- linear_glance %>%
+  select(r.squared, adj.r.squared)
+
+coeff_pvals
+rsquare_adjrsquare
+
+```
+
+```{r lin reg2}
+# Add interaction between home and away teams to previous model
+spreadlin2 <- lm(spread ~ factor(home_team) * factor(away_team) + quarter + yardline, data = kick_data)
+
+# Get R-squared and adjusted R-squared of new model
+linglance2 <- glance(spreadlin2)
+rsq_adjrsq2 <- linglance2 %>%
+  select(r.squared, adj.r.squared)
+
+rsq_adjrsq2
+```
+
+```{r lin pred}
+# Split data into 80-20 training testing split
+set.seed(123)
+create_train_test <- function(data, size = 0.8, train = TRUE) {
+    n_row = nrow(data)
+    total_row = size * n_row
+    train_sample <- 1: total_row
+    if (train == TRUE) {
+        return (data[train_sample, ])
+    } else {
+        return (data[-train_sample, ])
+    }
+}
+
+kick_train <- create_train_test(kick_data, 0.8, train = TRUE)
+kick_test <- create_train_test(kick_data, 0.8, train = FALSE)
+
+# Fit models on training data
+train_mod1 <- lm(spread ~ factor(home_team) + factor(away_team) + quarter + yardline, data = kick_train)
+train_mod2 <- lm(spread ~ factor(home_team) * factor(away_team) + quarter + yardline, data = kick_train)
+
+# Predict spread with testing data
+test_pred1 <- predict(train_mod1, newdata = kick_test)
+test_pred2 <- predict(train_mod2, newdata = kick_test)
+
+# Calculate RMSE and MAD
+rmse1 <- sqrt(mean((test_pred1 - kick_test$spread)^2))
+mad1 <- mean(abs(test_pred1 - kick_test$spread))
+
+rmse2 <- sqrt(mean((test_pred2 - kick_test$spread)^2))
+mad2 <- mean(abs(test_pred2 - kick_test$spread))
+
+# Make table to house RMSE and MAD values
+results <- data.frame(
+  Model = c("Without Interaction", "With Interaction"),
+  RMSE = c(rmse1, rmse2),
+  MAD = c(mad1, mad2)
+)
+
+results
+```
+
+# Logistical Regression
+
+```{r log reg1}
+# Subset kick data for only field goals and only keep kickers with more than 100 field goals
+field_goals <- kick_data %>%
+  filter(play_type == "Field Goal")
+
+kickers_fg <- field_goals %>%
+  group_by(kicker_name) %>%
+  filter(n() > 100) %>%
+  ungroup()
+
+# Fit logistic regression model to predict probability of success
+log_mod <- glm(scored ~ yardline + quarter + factor(kicker_name) + spread, data = kickers_fg, family = "binomial")
+log_tidy <- tidy(log_mod)
+
+log_tidy
+```
+
+```{r conf mat1}
+# Create confusion matrix for predicted and actual field goals
+fg_pred <- predict(log_mod, type = "response")
+pred_class <- ifelse(fg_pred > 0.5, 1, 0)
+actual_fg <- kickers_fg$scored
+conf_mat <- table(Predicted = pred_class, Actual = actual_fg)
+
+conf_mat
+```
+
+```{r cross validation}
+# Add empty column for predictions
+kickers_fg$predicted_scored <- NA
+
+# Assign each obs to a fold
+set.seed(123)
+kickers_fg$fold <- sample(1:10, nrow(kickers_fg), replace = TRUE)
+
+# Perform 10-fold CV
+for (fold in 1:10) {
+  fg_train <- kickers_fg[kickers_fg$fold != fold, ]
+  fg_test <- kickers_fg[kickers_fg$fold == fold, ]
+  
+  fg_mod <- glm(scored ~ yardline + quarter + factor(kicker_name) + spread, data = fg_train, family = "binomial")
+  
+  fg_pred_prob <- predict(fg_mod, newdata = fg_test, type = "response")
+  fg_pred_class <- ifelse(fg_pred_prob > 0.5, 1, 0)
+  
+  kickers_fg$predicted_scored[kickers_fg$fold == fold] <- fg_pred_class
+}
+
+# Check to make sure there are no NA values in prediction column
+# sum(is.na(kickers_fg$predicted_scored))
+
+# Store actual and predicted fg results in variables
+fg_actual <- kickers_fg$scored
+fg_predicted <- kickers_fg$predicted_scored
+
+# Create confusion matrix
+fg_conf_mat <- table(Actual = fg_actual, Predicted = fg_predicted)
+
+fg_conf_mat
+```
